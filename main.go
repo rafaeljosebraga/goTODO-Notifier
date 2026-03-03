@@ -1,149 +1,183 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
+	"goTODO/anytype"
 	"goTODO/config"
-	"io"
+	"image/color"
 	"log"
-	"net/http"
+	"os"
+	"sort"
+	"sync"
 	"time"
+
+	"gioui.org/app"
+	"gioui.org/font/gofont"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/text"
+	"gioui.org/unit"
+	"gioui.org/widget/material"
 )
 
-const baseURL = "http://127.0.0.1:31012/v1"
+type state struct {
+	mu    sync.Mutex
+	tasks []anytype.Task
+	err   error
+	done  bool
+}
 
 func main() {
 	cfg := config.Load()
+	log.Printf("Starting goTODO UI (Anytype CLI Port: 31012)")
 
-	log.Println("Starting goTODO with Anytype CLI (Port 31012)...")
+	anytypeClient := anytype.NewClient(cfg.APIKey)
+	appState := &state{}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	apiKey := cfg.APIKey
+	go func() {
+		w := new(app.Window)
+		w.Option(app.Title("goTODO"))
+		w.Option(app.Size(unit.Dp(500), unit.Dp(600)))
 
-	// 1. Get Space ID
-	spaceID, err := getFirstSpaceID(client, apiKey)
+		// Start fetching tasks in background
+		go fetchTasks(anytypeClient, appState, w)
+
+		// Start periodic reminders
+		go startReminderLoop(anytypeClient, appState)
+
+		if err := loop(w, appState); err != nil {
+			log.Fatal(err)
+		}
+		os.Exit(0)
+	}()
+	app.Main()
+}
+
+func fetchTasks(client *anytype.Client, s *state, w *app.Window) {
+	spaceID, _, err := client.GetFirstSpaceID()
 	if err != nil {
-		log.Fatalf("Failed to get space ID: %v", err)
+		updateState(s, nil, err, w)
+		return
 	}
-	fmt.Printf("Using Space ID: %s\n", spaceID)
 
-	// 2. Discover Task Type ID
-	taskTypeID, err := discoverTaskTypeID(client, apiKey, spaceID)
+	typeID, err := client.DiscoverTaskTypeID(spaceID)
 	if err != nil {
-		log.Printf("Warning: Could not discover Task type ID dynamically: %v. Using fallback 'ot-task'", err)
-		taskTypeID = "ot-task"
+		updateState(s, nil, err, w)
+		return
 	}
-	fmt.Printf("Using Task Type ID: %s\n", taskTypeID)
 
-	// 3. Fetch Tasks
-	err = fetchAndPrintTasks(client, apiKey, spaceID, taskTypeID)
-	if err != nil {
-		log.Fatalf("Failed to fetch tasks: %v", err)
+	tasks, err := client.FetchTasks(spaceID, typeID)
+	// Sort tasks by due date (soonest first, empty dates last)
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].DueDate.IsZero() {
+			return false
+		}
+		if tasks[j].DueDate.IsZero() {
+			return true
+		}
+		return tasks[i].DueDate.Before(tasks[j].DueDate)
+	})
+
+	if err == nil && len(tasks) > 0 {
+		client.Notify("goTODO", fmt.Sprintf("Tasks loaded: %d items", len(tasks)))
+	}
+	updateState(s, tasks, err, w)
+}
+
+func startReminderLoop(client *anytype.Client, s *state) {
+	ticker := time.NewTicker(5 * time.Second)
+	for range ticker.C {
+		s.mu.Lock()
+		var priorityTask *anytype.Task
+		for _, t := range s.tasks {
+			if !t.DueDate.IsZero() && t.DueDate.After(time.Now().Add(-24*time.Hour)) {
+				priorityTask = &t
+				break
+			}
+		}
+		s.mu.Unlock()
+
+		if priorityTask != nil {
+			client.Notify("⏰ Task Reminder", fmt.Sprintf("Next up: %s\nDue: %s",
+				priorityTask.Name, priorityTask.DueDate.Format("Jan 02")))
+		}
 	}
 }
 
-func makeRequest(client *http.Client, apiKey, url string) ([]byte, error) {
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Add("Authorization", "Bearer "+apiKey)
-	req.Header.Add("Anytype-Version", "2024-01-01")
-
-	res, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(res.Body)
-		return nil, fmt.Errorf("API failed (%d): %s", res.StatusCode, string(body))
-	}
-
-	return io.ReadAll(res.Body)
+func updateState(s *state, tasks []anytype.Task, err error, w *app.Window) {
+	s.mu.Lock()
+	s.tasks = tasks
+	s.err = err
+	s.done = true
+	s.mu.Unlock()
+	w.Invalidate()
 }
 
-func getFirstSpaceID(client *http.Client, apiKey string) (string, error) {
-	body, err := makeRequest(client, apiKey, baseURL+"/spaces")
-	if err != nil {
-		return "", err
-	}
+func loop(w *app.Window, s *state) error {
+	th := material.NewTheme()
+	th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
 
-	var response struct {
-		Data []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return "", err
-	}
+	var ops op.Ops
+	var list layout.List
+	list.Axis = layout.Vertical
 
-	for _, s := range response.Data {
-		if s.Name == "Faculdade" {
-			return s.ID, nil
+	for {
+		switch e := w.Event().(type) {
+		case app.DestroyEvent:
+			return e.Err
+		case app.FrameEvent:
+			gtx := app.NewContext(&ops, e)
+			ops.Reset()
+
+			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					title := material.H4(th, "goTODO Tasks")
+					title.Color = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+					title.Alignment = text.Middle
+					return layout.UniformInset(unit.Dp(16)).Layout(gtx, title.Layout)
+				}),
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					s.mu.Lock()
+					defer s.mu.Unlock()
+
+					if !s.done {
+						return material.Body1(th, "Loading tasks from Anytype...").Layout(gtx)
+					}
+					if s.err != nil {
+						return material.Body1(th, "Error: "+s.err.Error()).Layout(gtx)
+					}
+					if len(s.tasks) == 0 {
+						return material.Body1(th, "No tasks found.").Layout(gtx)
+					}
+
+					return list.Layout(gtx, len(s.tasks), func(gtx layout.Context, i int) layout.Dimensions {
+						return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							t := s.tasks[i]
+							var taskColor color.NRGBA
+							prefix := "- "
+
+							// Highlight priority task (first one with a date)
+							if !t.DueDate.IsZero() && i == 0 {
+								taskColor = color.NRGBA{R: 0xdb, G: 0x44, B: 0x37, A: 0xff} // Red
+								prefix = "🔥 "
+							} else {
+								taskColor = color.NRGBA{A: 0xff}
+							}
+
+							content := prefix + t.Name
+							if !t.DueDate.IsZero() {
+								content += " (" + t.DueDate.Format("Jan 02") + ")"
+							}
+
+							lbl := material.Body1(th, content)
+							lbl.Color = taskColor
+							return lbl.Layout(gtx)
+						})
+					})
+				}),
+			)
+
+			e.Frame(gtx.Ops)
 		}
 	}
-	return response.Data[0].ID, nil
-}
-
-func discoverTaskTypeID(client *http.Client, apiKey, spaceID string) (string, error) {
-	url := fmt.Sprintf("%s/spaces/%s/types", baseURL, spaceID)
-	body, err := makeRequest(client, apiKey, url)
-	if err != nil {
-		return "", err
-	}
-
-	var response struct {
-		Data []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return "", err
-	}
-
-	for _, t := range response.Data {
-		if t.Name == "Task" || t.Name == "Tarefa" {
-			return t.ID, nil
-		}
-	}
-	return "", fmt.Errorf("task type not found in space")
-}
-
-func fetchAndPrintTasks(client *http.Client, apiKey, spaceID, typeID string) error {
-	// Trying with the discovered type ID
-	url := fmt.Sprintf("%s/spaces/%s/objects?type=%s", baseURL, spaceID, typeID)
-	body, err := makeRequest(client, apiKey, url)
-	if err != nil {
-		// If filtering still fails, fetch all and filter manually in Go
-		log.Printf("Filtering by type failed, fetching all objects and filtering manually...")
-		url = fmt.Sprintf("%s/spaces/%s/objects", baseURL, spaceID)
-		body, err = makeRequest(client, apiKey, url)
-		if err != nil {
-			return err
-		}
-	}
-
-	var rawResponse struct {
-		Data []map[string]interface{} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &rawResponse); err != nil {
-		return err
-	}
-
-	fmt.Println("Tasks found:")
-	for _, obj := range rawResponse.Data {
-		// Manual filter: check if it's a task by layout or type if available
-		layout, _ := obj["layout"].(string)
-		name, _ := obj["name"].(string)
-		
-		if layout == "action" || layout == "task" {
-			fmt.Printf("- [ ] %s (ID: %s)\n", name, obj["id"])
-		}
-	}
-
-	return nil
 }
