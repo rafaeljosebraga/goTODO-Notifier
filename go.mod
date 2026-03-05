@@ -2,14 +2,16 @@ module goTODO
 
 go 1.25.0
 
-require github.com/joho/godotenv v1.5.1
+require (
+	gioui.org v0.9.0
+	github.com/gen2brain/beeep v0.11.2
+	github.com/joho/godotenv v1.5.1
+)
 
 require (
-	gioui.org v0.9.0 // indirect
 	gioui.org/shader v1.0.8 // indirect
 	git.sr.ht/~jackmordaunt/go-toast v1.1.2 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
-	github.com/gen2brain/beeep v0.11.2 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/go-text/typesetting v0.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
