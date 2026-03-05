@@ -45,7 +45,7 @@ func startReminderLoop(client *anytype.Client, s *ui.State) {
 		s.Mu.Lock()
 		var priorityTask *anytype.Task
 		for _, t := range s.Tasks {
-			if !t.DueDate.IsZero() && t.DueDate.After(time.Now().Add(-24*time.Hour)) {
+			if !t.IsCompleted && !t.DueDate.IsZero() && t.DueDate.After(time.Now().Add(-24*time.Hour)) {
 				priorityTask = &t
 				break
 			}

@@ -24,6 +24,9 @@ type State struct {
 	Done       bool
 	Loading    bool
 	RefreshBtn widget.Clickable
+	CurrentTab int // 0: Ingoing, 1: Completed
+	Tab0Btn    widget.Clickable
+	Tab1Btn    widget.Clickable
 }
 
 func FetchTasks(client *anytype.Client, s *State, w *app.Window) {
@@ -91,6 +94,16 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 			if s.RefreshBtn.Clicked(gtx) {
 				go FetchTasks(client, s, w)
 			}
+			if s.Tab0Btn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.CurrentTab = 0
+				s.Mu.Unlock()
+			}
+			if s.Tab1Btn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.CurrentTab = 1
+				s.Mu.Unlock()
+			}
 
 			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -119,6 +132,34 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 						}),
 					)
 				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Flex{}.Layout(gtx,
+						layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
+							s.Mu.Lock()
+							isActive := s.CurrentTab == 0
+							s.Mu.Unlock()
+							btn := material.Button(th, &s.Tab0Btn, "Ingoing")
+							if isActive {
+								btn.Background = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+							} else {
+								btn.Background = color.NRGBA{R: 0xbb, G: 0xbb, B: 0xbb, A: 0xff}
+							}
+							return layout.UniformInset(unit.Dp(4)).Layout(gtx, btn.Layout)
+						}),
+						layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
+							s.Mu.Lock()
+							isActive := s.CurrentTab == 1
+							s.Mu.Unlock()
+							btn := material.Button(th, &s.Tab1Btn, "Completed")
+							if isActive {
+								btn.Background = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+							} else {
+								btn.Background = color.NRGBA{R: 0xbb, G: 0xbb, B: 0xbb, A: 0xff}
+							}
+							return layout.UniformInset(unit.Dp(4)).Layout(gtx, btn.Layout)
+						}),
+					)
+				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					s.Mu.Lock()
 					defer s.Mu.Unlock()
@@ -129,25 +170,47 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 					if s.Err != nil {
 						return material.Body1(th, "Error: "+s.Err.Error()).Layout(gtx)
 					}
-					if len(s.Tasks) == 0 {
-						return material.Body1(th, "No tasks found.").Layout(gtx)
+
+					var filteredTasks []anytype.Task
+					for _, t := range s.Tasks {
+						if s.CurrentTab == 1 && t.IsCompleted {
+							filteredTasks = append(filteredTasks, t)
+						} else if s.CurrentTab == 0 && !t.IsCompleted {
+							filteredTasks = append(filteredTasks, t)
+						}
 					}
 
-					return list.Layout(gtx, len(s.Tasks), func(gtx layout.Context, i int) layout.Dimensions {
-						return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							t := s.Tasks[i]
-							var taskColor color.NRGBA
-							prefix := "- "
+					if len(filteredTasks) == 0 {
+						msg := "No ingoing tasks."
+						if s.CurrentTab == 1 {
+							msg = "No completed tasks."
+						}
+						return material.Body1(th, msg).Layout(gtx)
+					}
 
-							// Highlight priority task (first one with a date)
-							if !t.DueDate.IsZero() && i == 0 {
+					return list.Layout(gtx, len(filteredTasks), func(gtx layout.Context, i int) layout.Dimensions {
+						return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+							t := filteredTasks[i]
+							var taskColor color.NRGBA
+							prefix := "[ ] "
+							if t.IsCompleted {
+								prefix = "[x] "
+							}
+
+							// Highlight priority task (first one with a date, if not completed)
+							if !t.DueDate.IsZero() && i == 0 && !t.IsCompleted {
 								taskColor = color.NRGBA{R: 0xdb, G: 0x44, B: 0x37, A: 0xff} // Red
-								prefix = "🔥 "
+								prefix = "🔥 " + prefix
+							} else if t.IsCompleted {
+								taskColor = color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff} // Gray
 							} else {
 								taskColor = color.NRGBA{A: 0xff}
 							}
 
 							content := prefix + t.Name
+							if t.Status != "" {
+								content += " [" + t.Status + "]"
+							}
 							if !t.DueDate.IsZero() {
 								content += " (" + t.DueDate.Format("Jan 02") + ")"
 							}

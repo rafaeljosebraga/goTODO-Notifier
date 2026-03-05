@@ -104,9 +104,11 @@ func (c *Client) DiscoverTaskTypeID(spaceID string) (string, error) {
 }
 
 type Task struct {
-	ID      string
-	Name    string
-	DueDate time.Time
+	ID          string
+	Name        string
+	DueDate     time.Time
+	Status      string
+	IsCompleted bool
 }
 
 func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
@@ -122,8 +124,12 @@ func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 			Name       string `json:"name"`
 			Layout     string `json:"layout"`
 			Properties []struct {
-				Key  string `json:"key"`
-				Date string `json:"date"`
+				Key      string `json:"key"`
+				Date     string `json:"date"`
+				Checkbox *bool  `json:"checkbox"`
+				Select   *struct {
+					Name string `json:"name"`
+				} `json:"select"`
 			} `json:"properties"`
 		} `json:"data"`
 	}
@@ -135,18 +141,26 @@ func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 	for _, obj := range rawResponse.Data {
 		if obj.Layout == "action" || obj.Layout == "task" {
 			t := Task{ID: obj.ID, Name: obj.Name}
-			// Parse due_date property
+			// Parse properties
 			for _, p := range obj.Properties {
-				if p.Key == "due_date" && p.Date != "" {
-					// Try RFC3339 first (e.g. 2026-03-10T03:00:00Z)
-					parsedDate, err := time.Parse(time.RFC3339, p.Date)
-					if err != nil {
-						// Fallback to simple date (e.g. 2026-03-10)
-						parsedDate, err = time.Parse("2006-01-02", p.Date)
+				switch p.Key {
+				case "due_date":
+					if p.Date != "" {
+						parsedDate, err := time.Parse(time.RFC3339, p.Date)
+						if err != nil {
+							parsedDate, err = time.Parse("2006-01-02", p.Date)
+						}
+						if err == nil {
+							t.DueDate = parsedDate
+						}
 					}
-
-					if err == nil {
-						t.DueDate = parsedDate
+				case "status":
+					if p.Select != nil {
+						t.Status = p.Select.Name
+					}
+				case "done":
+					if p.Checkbox != nil {
+						t.IsCompleted = *p.Checkbox
 					}
 				}
 			}
