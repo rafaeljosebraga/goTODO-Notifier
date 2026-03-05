@@ -18,15 +18,18 @@ import (
 )
 
 type State struct {
-	Mu         sync.Mutex
-	Tasks      []anytype.Task
-	Err        error
-	Done       bool
-	Loading    bool
-	RefreshBtn widget.Clickable
-	CurrentTab int // 0: Ingoing, 1: Completed
-	Tab0Btn    widget.Clickable
-	Tab1Btn    widget.Clickable
+	Mu             sync.Mutex
+	Tasks          []anytype.Task
+	Err            error
+	Done           bool
+	Loading        bool
+	RefreshBtn     widget.Clickable
+	CurrentTab     int // 0: Ingoing, 1: Completed
+	Tab0Btn        widget.Clickable
+	Tab1Btn        widget.Clickable
+	SelectedTaskID string
+	BackBtn        widget.Clickable
+	TaskClickables []widget.Clickable
 }
 
 func FetchTasks(client *anytype.Client, s *State, w *app.Window) {
@@ -68,6 +71,7 @@ func FetchTasks(client *anytype.Client, s *State, w *app.Window) {
 func UpdateState(s *State, tasks []anytype.Task, err error, w *app.Window) {
 	s.Mu.Lock()
 	s.Tasks = tasks
+	s.TaskClickables = make([]widget.Clickable, len(tasks))
 	s.Err = err
 	s.Done = true
 	s.Loading = false
@@ -104,20 +108,36 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 				s.CurrentTab = 1
 				s.Mu.Unlock()
 			}
+			if s.BackBtn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.SelectedTaskID = ""
+				s.Mu.Unlock()
+			}
 
 			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
 						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							title := material.H4(th, "goTODO Tasks")
+							titleText := "goTODO Tasks"
+							s.Mu.Lock()
+							if s.SelectedTaskID != "" {
+								titleText = "Task Details"
+							}
+							s.Mu.Unlock()
+							title := material.H4(th, titleText)
 							title.Color = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
 							return layout.UniformInset(unit.Dp(16)).Layout(gtx, title.Layout)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 								s.Mu.Lock()
+								showBack := s.SelectedTaskID != ""
 								loading := s.Loading
 								s.Mu.Unlock()
+
+								if showBack {
+									return material.Button(th, &s.BackBtn, "Back").Layout(gtx)
+								}
 
 								btnText := "Refresh"
 								if loading {
@@ -132,98 +152,188 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 						}),
 					)
 				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{}.Layout(gtx,
-						layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
-							s.Mu.Lock()
-							isActive := s.CurrentTab == 0
-							s.Mu.Unlock()
-							btn := material.Button(th, &s.Tab0Btn, "Ingoing")
-							if isActive {
-								btn.Background = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
-							} else {
-								btn.Background = color.NRGBA{R: 0xbb, G: 0xbb, B: 0xbb, A: 0xff}
-							}
-							return layout.UniformInset(unit.Dp(4)).Layout(gtx, btn.Layout)
-						}),
-						layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
-							s.Mu.Lock()
-							isActive := s.CurrentTab == 1
-							s.Mu.Unlock()
-							btn := material.Button(th, &s.Tab1Btn, "Completed")
-							if isActive {
-								btn.Background = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
-							} else {
-								btn.Background = color.NRGBA{R: 0xbb, G: 0xbb, B: 0xbb, A: 0xff}
-							}
-							return layout.UniformInset(unit.Dp(4)).Layout(gtx, btn.Layout)
-						}),
-					)
-				}),
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					s.Mu.Lock()
-					defer s.Mu.Unlock()
+					selectedID := s.SelectedTaskID
+					s.Mu.Unlock()
 
-					if !s.Done && s.Loading {
-						return material.Body1(th, "Loading tasks from Anytype...").Layout(gtx)
-					}
-					if s.Err != nil {
-						return material.Body1(th, "Error: "+s.Err.Error()).Layout(gtx)
+					if selectedID != "" {
+						return showTaskDetails(gtx, th, s, client, w)
 					}
 
-					var filteredTasks []anytype.Task
-					for _, t := range s.Tasks {
-						if s.CurrentTab == 1 && t.IsCompleted {
-							filteredTasks = append(filteredTasks, t)
-						} else if s.CurrentTab == 0 && !t.IsCompleted {
-							filteredTasks = append(filteredTasks, t)
-						}
-					}
-
-					if len(filteredTasks) == 0 {
-						msg := "No ingoing tasks."
-						if s.CurrentTab == 1 {
-							msg = "No completed tasks."
-						}
-						return material.Body1(th, msg).Layout(gtx)
-					}
-
-					return list.Layout(gtx, len(filteredTasks), func(gtx layout.Context, i int) layout.Dimensions {
-						return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-							t := filteredTasks[i]
-							var taskColor color.NRGBA
-							prefix := "[ ] "
-							if t.IsCompleted {
-								prefix = "[x] "
-							}
-
-							// Highlight priority task (first one with a date, if not completed)
-							if !t.DueDate.IsZero() && i == 0 && !t.IsCompleted {
-								taskColor = color.NRGBA{R: 0xdb, G: 0x44, B: 0x37, A: 0xff} // Red
-								prefix = "🔥 " + prefix
-							} else if t.IsCompleted {
-								taskColor = color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff} // Gray
-							} else {
-								taskColor = color.NRGBA{A: 0xff}
-							}
-
-							content := prefix + t.Name
-							if t.Status != "" {
-								content += " [" + t.Status + "]"
-							}
-							if !t.DueDate.IsZero() {
-								content += " (" + t.DueDate.Format("Jan 02") + ")"
-							}
-
-							lbl := material.Body1(th, content)
-							lbl.Color = taskColor
-							return lbl.Layout(gtx)
-						})
-					})
+					return showTaskList(gtx, th, s, &list, client, w)
 				}),
 			)
 
 			e.Frame(gtx.Ops)
 		}
 	}
+}
+
+func showTaskList(gtx layout.Context, th *material.Theme, s *State, list *layout.List, client *anytype.Client, w *app.Window) layout.Dimensions {
+	s.Mu.Lock()
+	defer s.Mu.Unlock()
+
+	if !s.Done && s.Loading {
+		return material.Body1(th, "Loading tasks from Anytype...").Layout(gtx)
+	}
+	if s.Err != nil {
+		return material.Body1(th, "Error: "+s.Err.Error()).Layout(gtx)
+	}
+
+	return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+		layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{}.Layout(gtx,
+				layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
+					isActive := s.CurrentTab == 0
+					btn := material.Button(th, &s.Tab0Btn, "Ingoing")
+					if isActive {
+						btn.Background = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+					} else {
+						btn.Background = color.NRGBA{R: 0xbb, G: 0xbb, B: 0xbb, A: 0xff}
+					}
+					return layout.UniformInset(unit.Dp(4)).Layout(gtx, btn.Layout)
+				}),
+				layout.Flexed(0.5, func(gtx layout.Context) layout.Dimensions {
+					isActive := s.CurrentTab == 1
+					btn := material.Button(th, &s.Tab1Btn, "Completed")
+					if isActive {
+						btn.Background = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+					} else {
+						btn.Background = color.NRGBA{R: 0xbb, G: 0xbb, B: 0xbb, A: 0xff}
+					}
+					return layout.UniformInset(unit.Dp(4)).Layout(gtx, btn.Layout)
+				}),
+			)
+		}),
+		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+			var filteredTasks []anytype.Task
+			var filteredIndices []int
+			for i, t := range s.Tasks {
+				if (s.CurrentTab == 1 && t.IsCompleted) || (s.CurrentTab == 0 && !t.IsCompleted) {
+					filteredTasks = append(filteredTasks, t)
+					filteredIndices = append(filteredIndices, i)
+				}
+			}
+
+			if len(filteredTasks) == 0 {
+				msg := "No ingoing tasks."
+				if s.CurrentTab == 1 {
+					msg = "No completed tasks."
+				}
+				return material.Body1(th, msg).Layout(gtx)
+			}
+
+			return list.Layout(gtx, len(filteredTasks), func(gtx layout.Context, i int) layout.Dimensions {
+				realIdx := filteredIndices[i]
+				if s.TaskClickables[realIdx].Clicked(gtx) {
+					taskID := s.Tasks[realIdx].ID
+					go func() {
+						s.Mu.Lock()
+						s.SelectedTaskID = taskID
+						s.Mu.Unlock()
+
+						spaceID, _, _ := client.GetFirstSpaceID()
+						md, _ := client.FetchObjectDetails(spaceID, taskID)
+
+						s.Mu.Lock()
+						for i := range s.Tasks {
+							if s.Tasks[i].ID == taskID {
+								s.Tasks[i].Markdown = md
+							}
+						}
+						s.Mu.Unlock()
+						w.Invalidate()
+					}()
+				}
+
+				return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+					return material.Clickable(gtx, &s.TaskClickables[realIdx], func(gtx layout.Context) layout.Dimensions {
+						t := filteredTasks[i]
+						var taskColor color.NRGBA
+						prefix := "[ ] "
+						if t.IsCompleted {
+							prefix = "[x] "
+						}
+
+						if !t.DueDate.IsZero() && i == 0 && !t.IsCompleted {
+							taskColor = color.NRGBA{R: 0xdb, G: 0x44, B: 0x37, A: 0xff} // Red
+							prefix = "🔥 " + prefix
+						} else if t.IsCompleted {
+							taskColor = color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff} // Gray
+						} else {
+							taskColor = color.NRGBA{A: 0xff}
+						}
+
+						content := prefix + t.Name
+						if t.Status != "" {
+							content += " [" + t.Status + "]"
+						}
+						if !t.DueDate.IsZero() {
+							content += " (" + t.DueDate.Format("Jan 02") + ")"
+						}
+
+						lbl := material.Body1(th, content)
+						lbl.Color = taskColor
+						return lbl.Layout(gtx)
+					})
+				})
+			})
+		}),
+	)
+}
+
+func showTaskDetails(gtx layout.Context, th *material.Theme, s *State, client *anytype.Client, w *app.Window) layout.Dimensions {
+	s.Mu.Lock()
+	var task anytype.Task
+	for _, t := range s.Tasks {
+		if t.ID == s.SelectedTaskID {
+			task = t
+			break
+		}
+	}
+	s.Mu.Unlock()
+
+	return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.H6(th, task.Name).Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				status := "Status: " + task.Status
+				if status == "Status: " {
+					status = "Status: (Not set)"
+				}
+				return material.Body2(th, status).Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.Body1(th, "Details:").Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				md := task.Markdown
+				if md == "" {
+					md = "(Loading details...)"
+				}
+				return material.Body2(th, md).Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				if len(task.Links) == 0 {
+					return layout.Dimensions{}
+				}
+				return material.Body1(th, "Related Objects (Links):").Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				content := ""
+				for _, link := range task.Links {
+					content += "- " + link + "\n"
+				}
+				return material.Body2(th, content).Layout(gtx)
+			}),
+		)
+	})
 }

@@ -10,17 +10,19 @@ import (
 	"github.com/gen2brain/beeep"
 )
 
-const baseURL = "http://127.0.0.1:31012/v1"
+const defaultBaseURL = "http://127.0.0.1:31012/v1"
 
 type Client struct {
 	HTTPClient *http.Client
 	APIKey     string
+	BaseURL    string
 }
 
 func NewClient(apiKey string) *Client {
 	return &Client{
 		HTTPClient: &http.Client{Timeout: 10 * time.Second},
 		APIKey:     apiKey,
+		BaseURL:    defaultBaseURL,
 	}
 }
 
@@ -51,7 +53,7 @@ func (c *Client) makeRequest(url string) ([]byte, error) {
 }
 
 func (c *Client) GetFirstSpaceID() (string, string, error) {
-	body, err := c.makeRequest(baseURL + "/spaces")
+	body, err := c.makeRequest(c.BaseURL + "/spaces")
 	if err != nil {
 		return "", "", err
 	}
@@ -79,7 +81,7 @@ func (c *Client) GetFirstSpaceID() (string, string, error) {
 }
 
 func (c *Client) DiscoverTaskTypeID(spaceID string) (string, error) {
-	url := fmt.Sprintf("%s/spaces/%s/types", baseURL, spaceID)
+	url := fmt.Sprintf("%s/spaces/%s/types", c.BaseURL, spaceID)
 	body, err := c.makeRequest(url)
 	if err != nil {
 		return "", err
@@ -109,10 +111,12 @@ type Task struct {
 	DueDate     time.Time
 	Status      string
 	IsCompleted bool
+	Links       []string
+	Markdown    string
 }
 
 func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
-	url := fmt.Sprintf("%s/spaces/%s/objects", baseURL, spaceID)
+	url := fmt.Sprintf("%s/spaces/%s/objects", c.BaseURL, spaceID)
 	body, err := c.makeRequest(url)
 	if err != nil {
 		return nil, err
@@ -124,9 +128,10 @@ func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 			Name       string `json:"name"`
 			Layout     string `json:"layout"`
 			Properties []struct {
-				Key      string `json:"key"`
-				Date     string `json:"date"`
-				Checkbox *bool  `json:"checkbox"`
+				Key      string   `json:"key"`
+				Date     string   `json:"date"`
+				Checkbox *bool    `json:"checkbox"`
+				Objects  []string `json:"objects"`
 				Select   *struct {
 					Name string `json:"name"`
 				} `json:"select"`
@@ -162,6 +167,8 @@ func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 					if p.Checkbox != nil {
 						t.IsCompleted = *p.Checkbox
 					}
+				case "links":
+					t.Links = p.Objects
 				}
 			}
 			tasks = append(tasks, t)
@@ -169,4 +176,23 @@ func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 	}
 
 	return tasks, nil
+}
+
+func (c *Client) FetchObjectDetails(spaceID, objectID string) (string, error) {
+	url := fmt.Sprintf("%s/spaces/%s/objects/%s", c.BaseURL, spaceID, objectID)
+	body, err := c.makeRequest(url)
+	if err != nil {
+		return "", err
+	}
+
+	var response struct {
+		Object struct {
+			Markdown string `json:"markdown"`
+		} `json:"object"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return "", err
+	}
+
+	return response.Object.Markdown, nil
 }
