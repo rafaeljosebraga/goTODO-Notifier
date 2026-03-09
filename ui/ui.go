@@ -17,6 +17,10 @@ import (
 	"gioui.org/widget/material"
 )
 
+type Invalidator interface {
+	Invalidate()
+}
+
 type State struct {
 	Mu             sync.Mutex
 	Tasks          []anytype.Task
@@ -32,7 +36,7 @@ type State struct {
 	TaskClickables []widget.Clickable
 }
 
-func FetchTasks(client *anytype.Client, s *State, w *app.Window) {
+func FetchTasks(client *anytype.Client, s *State, w Invalidator) {
 	s.Mu.Lock()
 	s.Loading = true
 	s.Mu.Unlock()
@@ -68,7 +72,7 @@ func FetchTasks(client *anytype.Client, s *State, w *app.Window) {
 	UpdateState(s, tasks, err, w)
 }
 
-func UpdateState(s *State, tasks []anytype.Task, err error, w *app.Window) {
+func UpdateState(s *State, tasks []anytype.Task, err error, w Invalidator) {
 	s.Mu.Lock()
 	s.Tasks = tasks
 	s.TaskClickables = make([]widget.Clickable, len(tasks))
@@ -170,7 +174,7 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 	}
 }
 
-func showTaskList(gtx layout.Context, th *material.Theme, s *State, list *layout.List, client *anytype.Client, w *app.Window) layout.Dimensions {
+func showTaskList(gtx layout.Context, th *material.Theme, s *State, list *layout.List, client *anytype.Client, w Invalidator) layout.Dimensions {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 
@@ -283,7 +287,7 @@ func showTaskList(gtx layout.Context, th *material.Theme, s *State, list *layout
 	)
 }
 
-func showTaskDetails(gtx layout.Context, th *material.Theme, s *State, client *anytype.Client, w *app.Window) layout.Dimensions {
+func showTaskDetails(gtx layout.Context, th *material.Theme, s *State, client *anytype.Client, w Invalidator) layout.Dimensions {
 	s.Mu.Lock()
 	var task anytype.Task
 	for _, t := range s.Tasks {

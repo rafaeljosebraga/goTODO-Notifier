@@ -39,22 +39,27 @@ func main() {
 	app.Main()
 }
 
-func startReminderLoop(client *anytype.Client, s *ui.State) {
+func startReminderLoop(client anytype.Notifier, s *ui.State) {
 	ticker := time.NewTicker(5 * time.Second)
 	for range ticker.C {
-		s.Mu.Lock()
-		var priorityTask *anytype.Task
-		for _, t := range s.Tasks {
-			if !t.IsCompleted && !t.DueDate.IsZero() && t.DueDate.After(time.Now().Add(-24*time.Hour)) {
-				priorityTask = &t
-				break
-			}
-		}
-		s.Mu.Unlock()
-
-		if priorityTask != nil {
-			client.Notify("⏰ Task Reminder", fmt.Sprintf("Next up: %s\nDue: %s",
-				priorityTask.Name, priorityTask.DueDate.Format("Jan 02")))
-		}
+		processReminders(client, s)
 	}
 }
+
+func processReminders(client anytype.Notifier, s *ui.State) {
+	s.Mu.Lock()
+	var priorityTask *anytype.Task
+	for _, t := range s.Tasks {
+		if !t.IsCompleted && !t.DueDate.IsZero() && t.DueDate.After(time.Now().Add(-24*time.Hour)) {
+			priorityTask = &t
+			break
+		}
+	}
+	s.Mu.Unlock()
+
+	if priorityTask != nil {
+		client.Notify("⏰ Task Reminder", fmt.Sprintf("Next up: %s\nDue: %s",
+			priorityTask.Name, priorityTask.DueDate.Format("Jan 02")))
+	}
+}
+

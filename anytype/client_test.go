@@ -75,3 +75,64 @@ func TestFetchTasks(t *testing.T) {
 		t.Error("Expected IsCompleted to be true for task 2")
 	}
 }
+
+func TestGetFirstSpaceID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse := `{"data":[{"id":"space-1","name":"Faculdade"}]}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake-key")
+	client.BaseURL = server.URL
+
+	id, name, err := client.GetFirstSpaceID()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if id != "space-1" || name != "Faculdade" {
+		t.Errorf("Expected id 'space-1', name 'Faculdade', got %s, %s", id, name)
+	}
+}
+
+func TestDiscoverTaskTypeID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse := `{"data":[{"id":"type-1","name":"Task"}]}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake-key")
+	client.BaseURL = server.URL
+
+	id, err := client.DiscoverTaskTypeID("space-id")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if id != "type-1" {
+		t.Errorf("Expected id 'type-1', got %s", id)
+	}
+}
+
+func TestFetchObjectDetails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse := `{"object":{"markdown":"# Sample Markdown"}}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake-key")
+	client.BaseURL = server.URL
+
+	md, err := client.FetchObjectDetails("space-id", "object-id")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if md != "# Sample Markdown" {
+		t.Errorf("Expected markdown '# Sample Markdown', got '%s'", md)
+	}
+}
+
