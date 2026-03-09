@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gen2brain/beeep"
@@ -31,12 +34,17 @@ func NewClient(apiKey string) *Client {
 }
 
 func (c *Client) Notify(title, message string) error {
-	return beeep.Notify(title, message, "")
+	err := beeep.Notify(title, message, "")
+	if err != nil {
+		slog.Error("failed to send notification", "title", title, "error", err)
+	}
+	return err
 }
 
 func (c *Client) makeRequest(url string) ([]byte, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
+		slog.Error("failed to create request", "url", url, "error", err)
 		return nil, err
 	}
 	req.Header.Add("Authorization", "Bearer "+c.APIKey)
@@ -44,12 +52,14 @@ func (c *Client) makeRequest(url string) ([]byte, error) {
 
 	res, err := c.HTTPClient.Do(req)
 	if err != nil {
+		slog.Error("HTTP request failed", "url", url, "error", err)
 		return nil, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(res.Body)
+		slog.Error("API returned error status", "url", url, "status", res.StatusCode, "body", string(body))
 		return nil, fmt.Errorf("API failed (%d): %s", res.StatusCode, string(body))
 	}
 
@@ -59,7 +69,7 @@ func (c *Client) makeRequest(url string) ([]byte, error) {
 func (c *Client) GetFirstSpaceID() (string, string, error) {
 	body, err := c.makeRequest(c.BaseURL + "/spaces")
 	if err != nil {
-		return "", "", err
+		return "", "", fmt.Errorf("failed to fetch spaces: %w", err)
 	}
 
 	var response struct {
@@ -69,10 +79,12 @@ func (c *Client) GetFirstSpaceID() (string, string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", "", err
+		slog.Error("failed to unmarshal spaces response", "error", err)
+		return "", "", fmt.Errorf("failed to decode spaces: %w", err)
 	}
 
 	if len(response.Data) == 0 {
+		slog.Warn("no spaces found in Anytype")
 		return "", "", fmt.Errorf("no spaces found")
 	}
 
@@ -88,7 +100,7 @@ func (c *Client) DiscoverTaskTypeID(spaceID string) (string, error) {
 	url := fmt.Sprintf("%s/spaces/%s/types", c.BaseURL, spaceID)
 	body, err := c.makeRequest(url)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to fetch types for space %s: %w", spaceID, err)
 	}
 
 	var response struct {
@@ -98,7 +110,8 @@ func (c *Client) DiscoverTaskTypeID(spaceID string) (string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", err
+		slog.Error("failed to unmarshal types response", "space_id", spaceID, "error", err)
+		return "", fmt.Errorf("failed to decode types: %w", err)
 	}
 
 	for _, t := range response.Data {
@@ -106,7 +119,40 @@ func (c *Client) DiscoverTaskTypeID(spaceID string) (string, error) {
 			return t.ID, nil
 		}
 	}
+	slog.Warn("task type not found in space", "space_id", spaceID)
 	return "", fmt.Errorf("task type not found in space")
+}
+
+type SubTask struct {
+	Name        string
+	IsCompleted bool
+}
+
+func ParseSubTasks(markdown string) []SubTask {
+	var subTasks []SubTask
+	lines := strings.Split(markdown, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- [ ] ") {
+			subTasks = append(subTasks, SubTask{
+				Name:        strings.TrimPrefix(trimmed, "- [ ] "),
+				IsCompleted: false,
+			})
+		} else if strings.HasPrefix(trimmed, "- [x] ") {
+			subTasks = append(subTasks, SubTask{
+				Name:        strings.TrimPrefix(trimmed, "- [x] "),
+				IsCompleted: true,
+			})
+		}
+	}
+	return subTasks
+}
+
+func CleanMarkdown(md string) string {
+	// Pattern to match: [Task Name](anytype://object?id=...)
+	// We want to keep: Task Name
+	re := regexp.MustCompile(`\[([^\]]+)\]\(anytype://object\?id=[^\)]+\)`)
+	return re.ReplaceAllString(md, "$1")
 }
 
 type Task struct {
@@ -116,14 +162,36 @@ type Task struct {
 	Status      string
 	IsCompleted bool
 	Links       []string
+	LinkNames   map[string]string
 	Markdown    string
+}
+
+func (c *Client) ResolveTaskName(spaceID, objectID string) (string, error) {
+	url := fmt.Sprintf("%s/spaces/%s/objects/%s", c.BaseURL, spaceID, objectID)
+	body, err := c.makeRequest(url)
+
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch name for object %s: %w", objectID, err)
+	}
+
+	var response struct {
+		Object struct {
+			Name string `json:"name"`
+		} `json:"object"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		slog.Error("failed to unmarshal object response", "object_id", objectID, "error", err)
+		return "", fmt.Errorf("failed to decode object name: %w", err)
+	}
+
+	return response.Object.Name, nil
 }
 
 func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 	url := fmt.Sprintf("%s/spaces/%s/objects", c.BaseURL, spaceID)
 	body, err := c.makeRequest(url)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to fetch objects for space %s: %w", spaceID, err)
 	}
 
 	var rawResponse struct {
@@ -143,13 +211,18 @@ func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &rawResponse); err != nil {
-		return nil, err
+		slog.Error("failed to unmarshal tasks response", "space_id", spaceID, "error", err)
+		return nil, fmt.Errorf("failed to decode tasks: %w", err)
 	}
 
 	var tasks []Task
 	for _, obj := range rawResponse.Data {
 		if obj.Layout == "action" || obj.Layout == "task" {
-			t := Task{ID: obj.ID, Name: obj.Name}
+			t := Task{
+				ID:        obj.ID,
+				Name:      obj.Name,
+				LinkNames: make(map[string]string),
+			}
 			// Parse properties
 			for _, p := range obj.Properties {
 				switch p.Key {
@@ -161,6 +234,8 @@ func (c *Client) FetchTasks(spaceID, typeID string) ([]Task, error) {
 						}
 						if err == nil {
 							t.DueDate = parsedDate
+						} else {
+							slog.Warn("failed to parse due date", "task_id", obj.ID, "date", p.Date, "error", err)
 						}
 					}
 				case "status":
@@ -186,7 +261,7 @@ func (c *Client) FetchObjectDetails(spaceID, objectID string) (string, error) {
 	url := fmt.Sprintf("%s/spaces/%s/objects/%s", c.BaseURL, spaceID, objectID)
 	body, err := c.makeRequest(url)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to fetch details for object %s: %w", objectID, err)
 	}
 
 	var response struct {
@@ -195,7 +270,8 @@ func (c *Client) FetchObjectDetails(spaceID, objectID string) (string, error) {
 		} `json:"object"`
 	}
 	if err := json.Unmarshal(body, &response); err != nil {
-		return "", err
+		slog.Error("failed to unmarshal object details", "object_id", objectID, "error", err)
+		return "", fmt.Errorf("failed to decode object details: %w", err)
 	}
 
 	return response.Object.Markdown, nil

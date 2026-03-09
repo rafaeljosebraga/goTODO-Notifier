@@ -2,16 +2,26 @@ package ui
 
 import (
 	"goTODO/anytype"
+	"sync"
 	"testing"
 	"time"
 )
 
 type mockInvalidator struct {
+	mu          sync.Mutex
 	invalidated bool
 }
 
 func (m *mockInvalidator) Invalidate() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.invalidated = true
+}
+
+func (m *mockInvalidator) isInvalidated() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.invalidated
 }
 
 func TestUpdateState(t *testing.T) {
@@ -36,7 +46,7 @@ func TestUpdateState(t *testing.T) {
 	if len(s.TaskClickables) != 2 {
 		t.Errorf("Expected 2 clickables, got %d", len(s.TaskClickables))
 	}
-	if !mock.invalidated {
+	if !mock.isInvalidated() {
 		t.Error("Expected Invalidate to be called")
 	}
 }

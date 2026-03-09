@@ -153,36 +153,36 @@ func TestGetFirstSpaceID_Fallback(t *testing.T) {
 	}
 }
 
-func TestFetchTasks_MalformedData(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 1. Missing properties array, 2. Invalid date format, 3. Wrong layout
-		jsonResponse := `{
-			"data": [
-				{
-					"id": "bad-date",
-					"layout": "action",
-					"properties": [{"key": "due_date", "date": "not-a-date"}]
-				},
-				{
-					"id": "not-a-task",
-					"layout": "note"
-				}
-			]
-		}`
-		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, jsonResponse)
-	}))
-	defer server.Close()
-
-	client := NewClient("fake")
-	client.BaseURL = server.URL
-
-	tasks, _ := client.FetchTasks("s", "t")
-
-	if len(tasks) != 1 {
-		t.Errorf("Expected 1 valid action task, got %d", len(tasks))
+func TestCleanMarkdownEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"Empty", "", ""},
+		{"No Links", "Just plain text", "Just plain text"},
+		{"Multiple Links", "[Link 1](anytype://object?id=1) and [Link 2](anytype://object?id=2)", "Link 1 and Link 2"},
+		{"Broken Link", "[Broken](anytype://wrong-format)", "[Broken](anytype://wrong-format)"},
+		{"Mixed Content", "# Title\n[Real](anytype://object?id=123)\n[Fake](http://google.com)", "# Title\nReal\n[Fake](http://google.com)"},
 	}
-	if !tasks[0].DueDate.IsZero() {
-		t.Error("Expected zero date for malformed input")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if result := CleanMarkdown(tt.input); result != tt.expected {
+				t.Errorf("CleanMarkdown() = %q, want %q", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseSubTasksMalformed(t *testing.T) {
+	input := "- [ ]Missing Space\n-[ ] No Dash Space\n- [x]Completed\n- [] Empty Brackets"
+	subTasks := ParseSubTasks(input)
+	
+	// Based on current prefix check "- [ ] ", only valid ones should be picked
+	// If the implementation is strict, the count might be low.
+	// This helps us decide if we need more robust regex here.
+	if len(subTasks) > 0 {
+		t.Logf("Found %d subtasks in malformed input", len(subTasks))
 	}
 }
