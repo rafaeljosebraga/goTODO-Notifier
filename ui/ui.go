@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"goTODO/anytype"
+	"image"
 	"image/color"
 	"sort"
 	"sync"
@@ -11,6 +12,8 @@ import (
 	"gioui.org/font/gofont"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/op/clip"
+	"gioui.org/op/paint"
 	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
@@ -90,6 +93,69 @@ func UpdateState(s *State, tasks []anytype.Task, err error, w Invalidator) {
 	s.Loading = false
 	s.Mu.Unlock()
 	w.Invalidate()
+}
+
+func drawPlusIcon(gtx layout.Context) layout.Dimensions {
+	size := gtx.Dp(unit.Dp(16))
+	thickness := float32(gtx.Dp(unit.Dp(2)))
+	color := color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+
+	// Draw horizontal line
+	var hPath clip.Path
+	hPath.Begin(gtx.Ops)
+	hPath.MoveTo(layout.FPt(image.Pt(0, size/2-int(thickness/2))))
+	hPath.LineTo(layout.FPt(image.Pt(size, size/2-int(thickness/2))))
+	hPath.LineTo(layout.FPt(image.Pt(size, size/2+int(thickness/2))))
+	hPath.LineTo(layout.FPt(image.Pt(0, size/2+int(thickness/2))))
+	hPath.Close()
+	paint.FillShape(gtx.Ops, color, clip.Outline{Path: hPath.End()}.Op())
+
+	// Draw vertical line
+	var vPath clip.Path
+	vPath.Begin(gtx.Ops)
+	vPath.MoveTo(layout.FPt(image.Pt(size/2-int(thickness/2), 0)))
+	vPath.LineTo(layout.FPt(image.Pt(size/2+int(thickness/2), 0)))
+	vPath.LineTo(layout.FPt(image.Pt(size/2+int(thickness/2), size)))
+	vPath.LineTo(layout.FPt(image.Pt(size/2-int(thickness/2), size)))
+	vPath.Close()
+	paint.FillShape(gtx.Ops, color, clip.Outline{Path: vPath.End()}.Op())
+
+	return layout.Dimensions{Size: image.Pt(size, size)}
+}
+
+func drawMinusIcon(gtx layout.Context) layout.Dimensions {
+	size := gtx.Dp(unit.Dp(16))
+	thickness := float32(gtx.Dp(unit.Dp(2)))
+	color := color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+
+	// Draw horizontal line
+	var hPath clip.Path
+	hPath.Begin(gtx.Ops)
+	hPath.MoveTo(layout.FPt(image.Pt(0, size/2-int(thickness/2))))
+	hPath.LineTo(layout.FPt(image.Pt(size, size/2-int(thickness/2))))
+	hPath.LineTo(layout.FPt(image.Pt(size, size/2+int(thickness/2))))
+	hPath.LineTo(layout.FPt(image.Pt(0, size/2+int(thickness/2))))
+	hPath.Close()
+	paint.FillShape(gtx.Ops, color, clip.Outline{Path: hPath.End()}.Op())
+
+	return layout.Dimensions{Size: image.Pt(size, size)}
+}
+
+func drawStarIcon(gtx layout.Context) layout.Dimensions {
+	size := gtx.Dp(unit.Dp(16))
+	color := color.NRGBA{R: 0xdb, G: 0x44, B: 0x37, A: 0xff} // Red
+
+	// Draw a simple diamond/star shape
+	var path clip.Path
+	path.Begin(gtx.Ops)
+	path.MoveTo(layout.FPt(image.Pt(size/2, 0)))    // Top
+	path.LineTo(layout.FPt(image.Pt(size, size/2))) // Right
+	path.LineTo(layout.FPt(image.Pt(size/2, size))) // Bottom
+	path.LineTo(layout.FPt(image.Pt(0, size/2)))    // Left
+	path.Close()
+	paint.FillShape(gtx.Ops, color, clip.Outline{Path: path.End()}.Op())
+
+	return layout.Dimensions{Size: image.Pt(size, size)}
 }
 
 func Loop(w *app.Window, s *State, client *anytype.Client) error {
@@ -185,15 +251,13 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 												}),
 												layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
 												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-													symbol := "▾"
 													s.Mu.Lock()
-													if s.MenuOpen {
-														symbol = "▴"
-													}
+													open := s.MenuOpen
 													s.Mu.Unlock()
-													t := material.H4(th, symbol)
-													t.Color = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
-													return t.Layout(gtx)
+													if open {
+														return drawMinusIcon(gtx)
+													}
+													return drawPlusIcon(gtx)
 												}),
 											)
 										})
@@ -415,7 +479,6 @@ func showTaskList(gtx layout.Context, th *material.Theme, s *State, list *layout
 
 						if !t.DueDate.IsZero() && i == 0 && !t.IsCompleted {
 							taskColor = color.NRGBA{R: 0xdb, G: 0x44, B: 0x37, A: 0xff} // Red
-							prefix = "🔥 " + prefix
 						} else if t.IsCompleted {
 							taskColor = color.NRGBA{R: 0x88, G: 0x88, B: 0x88, A: 0xff} // Gray
 						} else {
@@ -430,9 +493,21 @@ func showTaskList(gtx layout.Context, th *material.Theme, s *State, list *layout
 							content += " (" + t.DueDate.Format("Jan 02") + ")"
 						}
 
-						lbl := material.Body1(th, content)
-						lbl.Color = taskColor
-						return lbl.Layout(gtx)
+						return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								if !t.DueDate.IsZero() && i == 0 && !t.IsCompleted {
+									return layout.Inset{Right: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+										return drawStarIcon(gtx)
+									})
+								}
+								return layout.Dimensions{}
+							}),
+							layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+								lbl := material.Body1(th, content)
+								lbl.Color = taskColor
+								return lbl.Layout(gtx)
+							}),
+						)
 					})
 				})
 			})

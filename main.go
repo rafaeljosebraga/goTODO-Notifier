@@ -60,7 +60,7 @@ func processReminders(client anytype.Notifier, s *ui.State) {
 	s.Mu.Unlock()
 
 	if priorityTask != nil {
-		client.Notify("⏰ Task Reminder", fmt.Sprintf("Next up: %s\nDue: %s",
+		client.Notify("TASK ALERT", fmt.Sprintf("Next up: %s\nDue: %s",
 			priorityTask.Name, priorityTask.DueDate.Format("Jan 02")))
 	}
 }
