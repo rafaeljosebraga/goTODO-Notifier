@@ -12,6 +12,10 @@ import (
 
 const defaultBaseURL = "http://127.0.0.1:31012/v1"
 
+type Notifier interface {
+	Notify(title, message string) error
+}
+
 type Client struct {
 	HTTPClient *http.Client
 	APIKey     string

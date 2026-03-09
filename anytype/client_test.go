@@ -75,3 +75,115 @@ func TestFetchTasks(t *testing.T) {
 		t.Error("Expected IsCompleted to be true for task 2")
 	}
 }
+
+func TestGetFirstSpaceID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse := `{"data":[{"id":"space-1","name":"Faculdade"}]}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake-key")
+	client.BaseURL = server.URL
+
+	id, name, err := client.GetFirstSpaceID()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if id != "space-1" || name != "Faculdade" {
+		t.Errorf("Expected id 'space-1', name 'Faculdade', got %s, %s", id, name)
+	}
+}
+
+func TestDiscoverTaskTypeID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse := `{"data":[{"id":"type-1","name":"Task"}]}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake-key")
+	client.BaseURL = server.URL
+
+	id, err := client.DiscoverTaskTypeID("space-id")
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if id != "type-1" {
+		t.Errorf("Expected id 'type-1', got %s", id)
+	}
+}
+
+func TestApiErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error": "Unauthorized"}`)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake-key")
+	client.BaseURL = server.URL
+
+	_, err := client.FetchTasks("space", "type")
+	if err == nil {
+		t.Error("Expected error for 401 response, got nil")
+	}
+}
+
+func TestGetFirstSpaceID_Fallback(t *testing.T) {
+	// Scenario: "Faculdade" space doesn't exist, should take the first one
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		jsonResponse := `{"data":[{"id":"other-id","name":"Personal"}]}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake-key")
+	client.BaseURL = server.URL
+
+	id, name, err := client.GetFirstSpaceID()
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if id != "other-id" || name != "Personal" {
+		t.Errorf("Expected fallback to 'Personal', got %s", name)
+	}
+}
+
+func TestFetchTasks_MalformedData(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 1. Missing properties array, 2. Invalid date format, 3. Wrong layout
+		jsonResponse := `{
+			"data": [
+				{
+					"id": "bad-date",
+					"layout": "action",
+					"properties": [{"key": "due_date", "date": "not-a-date"}]
+				},
+				{
+					"id": "not-a-task",
+					"layout": "note"
+				}
+			]
+		}`
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, jsonResponse)
+	}))
+	defer server.Close()
+
+	client := NewClient("fake")
+	client.BaseURL = server.URL
+
+	tasks, _ := client.FetchTasks("s", "t")
+
+	if len(tasks) != 1 {
+		t.Errorf("Expected 1 valid action task, got %d", len(tasks))
+	}
+	if !tasks[0].DueDate.IsZero() {
+		t.Error("Expected zero date for malformed input")
+	}
+}
+
