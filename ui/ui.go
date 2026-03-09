@@ -34,6 +34,12 @@ type State struct {
 	SelectedTaskID string
 	BackBtn        widget.Clickable
 	TaskClickables []widget.Clickable
+	MenuOpen       bool
+	TitleBtn       widget.Clickable
+	SettingsBtn    widget.Clickable
+	TasksBtn       widget.Clickable
+	MockMBtn       widget.Clickable
+	CurrentView    string // "tasks", "settings", "mockM"
 }
 
 func FetchTasks(client *anytype.Client, s *State, w Invalidator) {
@@ -87,6 +93,13 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 	th := material.NewTheme()
 	th.Shaper = text.NewShaper(text.WithCollection(gofont.Collection()))
 
+	// Initialize state
+	s.Mu.Lock()
+	if s.CurrentView == "" {
+		s.CurrentView = "tasks"
+	}
+	s.Mu.Unlock()
+
 	var ops op.Ops
 	var list layout.List
 	list.Axis = layout.Vertical
@@ -99,8 +112,41 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 			gtx := app.NewContext(&ops, e)
 			ops.Reset()
 
+			// Handle Events
 			if s.RefreshBtn.Clicked(gtx) {
 				go FetchTasks(client, s, w)
+			}
+			if s.TitleBtn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.MenuOpen = !s.MenuOpen
+				s.Mu.Unlock()
+			}
+			if s.TasksBtn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.CurrentView = "tasks"
+				s.SelectedTaskID = ""
+				s.MenuOpen = false
+				s.Mu.Unlock()
+			}
+			if s.SettingsBtn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.CurrentView = "settings"
+				s.SelectedTaskID = ""
+				s.MenuOpen = false
+				s.Mu.Unlock()
+			}
+			if s.MockMBtn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.CurrentView = "mockM"
+				s.SelectedTaskID = ""
+				s.MenuOpen = false
+				s.Mu.Unlock()
+			}
+			if s.BackBtn.Clicked(gtx) {
+				s.Mu.Lock()
+				s.CurrentView = "tasks"
+				s.SelectedTaskID = ""
+				s.Mu.Unlock()
 			}
 			if s.Tab0Btn.Clicked(gtx) {
 				s.Mu.Lock()
@@ -112,46 +158,96 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 				s.CurrentTab = 1
 				s.Mu.Unlock()
 			}
-			if s.BackBtn.Clicked(gtx) {
-				s.Mu.Lock()
-				s.SelectedTaskID = ""
-				s.Mu.Unlock()
-			}
 
 			layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-						layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-							titleText := "goTODO Tasks"
-							s.Mu.Lock()
-							if s.SelectedTaskID != "" {
-								titleText = "Task Details"
-							}
-							s.Mu.Unlock()
-							title := material.H4(th, titleText)
-							title.Color = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
-							return layout.UniformInset(unit.Dp(16)).Layout(gtx, title.Layout)
+					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+								layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+									return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+										s.Mu.Lock()
+										title := "goTODO"
+										if s.SelectedTaskID != "" {
+											title = "Task Detail"
+										}
+										s.Mu.Unlock()
+
+										return material.Clickable(gtx, &s.TitleBtn, func(gtx layout.Context) layout.Dimensions {
+											return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
+												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+													t := material.H4(th, title)
+													t.Color = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+													return t.Layout(gtx)
+												}),
+												layout.Rigid(layout.Spacer{Width: unit.Dp(8)}.Layout),
+												layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+													symbol := "▾"
+													s.Mu.Lock()
+													if s.MenuOpen {
+														symbol = "▴"
+													}
+													s.Mu.Unlock()
+													t := material.H4(th, symbol)
+													t.Color = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+													return t.Layout(gtx)
+												}),
+											)
+										})
+									})
+								}),
+								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+									return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+										s.Mu.Lock()
+										loading := s.Loading
+										isTasks := s.CurrentView == "tasks" && s.SelectedTaskID == ""
+										s.Mu.Unlock()
+
+										if !isTasks {
+											return material.Button(th, &s.BackBtn, "Back").Layout(gtx)
+										}
+
+										btnText := "Refresh"
+										if loading {
+											btnText = "..."
+										}
+										btn := material.Button(th, &s.RefreshBtn, btnText)
+										if loading {
+											gtx = gtx.Disabled()
+										}
+										return btn.Layout(gtx)
+									})
+								}),
+							)
 						}),
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-								s.Mu.Lock()
-								showBack := s.SelectedTaskID != ""
-								loading := s.Loading
-								s.Mu.Unlock()
-
-								if showBack {
-									return material.Button(th, &s.BackBtn, "Back").Layout(gtx)
-								}
-
-								btnText := "Refresh"
-								if loading {
-									btnText = "..."
-								}
-								btn := material.Button(th, &s.RefreshBtn, btnText)
-								if loading {
-									gtx = gtx.Disabled()
-								}
-								return btn.Layout(gtx)
+							s.Mu.Lock()
+							open := s.MenuOpen
+							s.Mu.Unlock()
+							if !open {
+								return layout.Dimensions{}
+							}
+							return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+								return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										return layout.UniformInset(unit.Dp(4)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+											btn := material.Button(th, &s.TasksBtn, "Tasks")
+											return btn.Layout(gtx)
+										})
+									}),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										return layout.UniformInset(unit.Dp(4)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+											btn := material.Button(th, &s.SettingsBtn, "Settings")
+											return btn.Layout(gtx)
+										})
+									}),
+									layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+										return layout.UniformInset(unit.Dp(4)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+											btn := material.Button(th, &s.MockMBtn, "mockM")
+											return btn.Layout(gtx)
+										})
+									}),
+								)
 							})
 						}),
 					)
@@ -159,13 +255,21 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 					s.Mu.Lock()
 					selectedID := s.SelectedTaskID
+					view := s.CurrentView
 					s.Mu.Unlock()
 
 					if selectedID != "" {
 						return showTaskDetails(gtx, th, s, client, w)
 					}
 
-					return showTaskList(gtx, th, s, &list, client, w)
+					switch view {
+					case "settings":
+						return showSettings(gtx, th, s, client, w)
+					case "mockM":
+						return showMockM(gtx, th, s, client, w)
+					default:
+						return showTaskList(gtx, th, s, &list, client, w)
+					}
 				}),
 			)
 
@@ -173,6 +277,53 @@ func Loop(w *app.Window, s *State, client *anytype.Client) error {
 		}
 	}
 }
+
+func showMockM(gtx layout.Context, th *material.Theme, s *State, client *anytype.Client, w Invalidator) layout.Dimensions {
+	return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.H6(th, "MockM Menu (Feature Demo)").Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.Body1(th, "This is a demonstration of the UI's flexibility.").Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.Body2(th, "Adding this menu required only adding a button to the state, a navigation handler, and this content function.").Layout(gtx)
+			}),
+		)
+	})
+}
+
+func showSettings(gtx layout.Context, th *material.Theme, s *State, client *anytype.Client, w Invalidator) layout.Dimensions {
+	return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.H6(th, "Anytype API Configuration").Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.Body1(th, "Base URL:").Layout(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.Body2(th, client.BaseURL).Layout(gtx)
+			}),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return material.Body1(th, "API Key (Masked):").Layout(gtx)
+			}),
+			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				masked := "****************"
+				if len(client.APIKey) > 8 {
+					masked = client.APIKey[:4] + "..." + client.APIKey[len(client.APIKey)-4:]
+				}
+				return material.Body2(th, masked).Layout(gtx)
+			}),
+		)
+	})
+}
+
 
 func showTaskList(gtx layout.Context, th *material.Theme, s *State, list *layout.List, client *anytype.Client, w Invalidator) layout.Dimensions {
 	s.Mu.Lock()
