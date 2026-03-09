@@ -64,4 +64,3 @@ func processReminders(client anytype.Notifier, s *ui.State) {
 			priorityTask.Name, priorityTask.DueDate.Format("Jan 02")))
 	}
 }
-

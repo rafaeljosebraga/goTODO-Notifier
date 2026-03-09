@@ -186,4 +186,3 @@ func TestFetchTasks_MalformedData(t *testing.T) {
 		t.Error("Expected zero date for malformed input")
 	}
 }
-

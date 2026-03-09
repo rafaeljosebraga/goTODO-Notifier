@@ -61,6 +61,3 @@ func TestSortTasks(t *testing.T) {
 		t.Errorf("Expected last task to be 'no-date', got %s", tasks[2].ID)
 	}
 }
-
-
-

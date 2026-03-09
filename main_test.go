@@ -57,4 +57,3 @@ func TestProcessReminders(t *testing.T) {
 		t.Error("Expected Notify NOT to be called for task due in 48h")
 	}
 }
-
