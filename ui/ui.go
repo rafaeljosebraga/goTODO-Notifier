@@ -390,20 +390,42 @@ func showTaskDetails(gtx layout.Context, th *material.Theme, s *State, client *a
 			break
 		}
 	}
-	// Ensure clickables match links
-	if len(s.LinkClickables) != len(task.Links) {
-		s.LinkClickables = make([]widget.Clickable, len(task.Links))
+
+	// 1. Create a snapshot of the data needed for layout
+	taskName := task.Name
+	taskStatus := task.Status
+	
+	// Safely copy links to avoid background slice modification during layout
+	var localLinks []string
+	if len(task.Links) > 0 {
+		localLinks = make([]string, len(task.Links))
+		copy(localLinks, task.Links)
 	}
+
+	// Safely copy link names to avoid map concurrent access during layout
+	localLinkNames := make(map[string]string)
+	for k, v := range task.LinkNames {
+		localLinkNames[k] = v
+	}
+
+	// Ensure clickables match links size before releasing lock
+	if len(s.LinkClickables) != len(localLinks) {
+		s.LinkClickables = make([]widget.Clickable, len(localLinks))
+	}
+	// We need to keep a reference to the clickables slice so we can interact with it, 
+	// but we must be careful not to let background updates reallocate it while we are looping.
+	localClickables := s.LinkClickables 
+
 	s.Mu.Unlock()
 
 	return layout.UniformInset(unit.Dp(16)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return material.H6(th, task.Name).Layout(gtx)
+				return material.H6(th, taskName).Layout(gtx)
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				status := "Status: " + task.Status
+				status := "Status: " + taskStatus
 				if status == "Status: " {
 					status = "Status: (Not set)"
 				}
@@ -411,43 +433,33 @@ func showTaskDetails(gtx layout.Context, th *material.Theme, s *State, client *a
 			}),
 			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				return material.Body1(th, "Details:").Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				md := task.Markdown
-				if md == "" {
-					md = "(Loading details...)"
+				if len(localLinks) == 0 {
+					return material.Body1(th, "(No related tasks)").Layout(gtx)
 				}
-				return material.Body2(th, md).Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(16)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-				if len(task.Links) == 0 {
-					return layout.Dimensions{}
-				}
-				return material.Body1(th, "Related Objects (Links):").Layout(gtx)
-			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
-			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+
 				var children []layout.FlexChild
-				for i, linkID := range task.Links {
+				for i, linkID := range localLinks {
 					i := i
 					linkID := linkID
 					children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						if s.LinkClickables[i].Clicked(gtx) {
+						if i >= len(localClickables) {
+							return layout.Dimensions{}
+						}
+						
+						if localClickables[i].Clicked(gtx) {
 							NavigateToTask(client, s, linkID, w)
 						}
-						// Use resolved name if available, fallback to ID
+						
 						label := linkID
-						s.Mu.Lock()
-						if name, ok := task.LinkNames[linkID]; ok && name != "" {
+						if name, ok := localLinkNames[linkID]; ok && name != "" {
 							label = name
 						}
-						s.Mu.Unlock()
 
-						btn := material.Button(th, &s.LinkClickables[i], "Go to: "+label)
-						return layout.UniformInset(unit.Dp(4)).Layout(gtx, btn.Layout)
+						return material.Clickable(gtx, &localClickables[i], func(gtx layout.Context) layout.Dimensions {
+							lbl := material.Body1(th, label)
+							lbl.Color = color.NRGBA{R: 0x3f, G: 0x51, B: 0xb5, A: 0xff}
+							return layout.UniformInset(unit.Dp(4)).Layout(gtx, lbl.Layout)
+						})
 					}))
 				}
 				return layout.Flex{Axis: layout.Vertical}.Layout(gtx, children...)
